@@ -1,0 +1,21 @@
+min version "3.7.53"
+max version "3.11.99"
+
+declare shader
+	"KSHair" (
+		# Render Pass Parameters
+		integer			"FrameBufferWriteOperation" default 1, # add
+		integer			"FrameBufferWriteFlags" default 0, # no flags
+		scalar			"FrameBufferWriteFactor" default 1.0,
+		# KSHair
+		color		"ambience",
+		color		"ambient",
+		color		"diffuse",
+		color		"specular",
+		scalar		"exponent",
+		integer		"mode",
+		array light	"lights"
+	)
+	version 1
+	apply material	
+end declare
