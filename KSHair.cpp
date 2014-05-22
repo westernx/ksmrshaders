@@ -188,6 +188,8 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	/* handling.                                             */
 	state->normal.x = state->normal.y = state->normal.z = 0.0f;
 
+	miColor diff_sum, spec_sum;
+
 	// Get the light list.
 	mi_instance_lightlist(&n_light, &light, state);
     for (; n_light--; light++)         
@@ -195,6 +197,9 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 
 		samples = 0;
 		sum.r = sum.g = sum.b = 0;
+		diff_sum.r = diff_sum.g = diff_sum.b = 0;
+		spec_sum.r = spec_sum.g = spec_sum.b = 0;
+
 
 		// Function that initialize light sample accumulators which need to be called before the sample loop.
 		sampleLightBegin(numberOfFrameBuffers, frameBufferInfo);
@@ -213,9 +218,15 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 			else if (dot_nl > 1.0f)
 				dot_nl = 1.0f;
 
-			sum.r += dot_nl * diffcol.r * Cl.r;
-			sum.g += dot_nl * diffcol.g * Cl.g;
-			sum.b += dot_nl * diffcol.b * Cl.b;
+			miColor s_diff = diffcol * Cl * dot_nl;
+			if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
+			{
+				MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, s_diff, DIFFUSE, true);
+			}
+
+			diff_sum.r += dot_nl * diffcol.r * Cl.r;
+			diff_sum.g += dot_nl * diffcol.g * Cl.g;
+			diff_sum.b += dot_nl * diffcol.b * Cl.b;
 
 			/* find the halfway vector h */
 			mi_vector_add(&H, &V, &L);
@@ -227,9 +238,15 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 
 			/* specular colour */
 			if (spec > 0.0) {
-				sum.r += spec * specular->r * Cl.r;
-				sum.g += spec * specular->g * Cl.g;
-				sum.b += spec * specular->b * Cl.b;
+				spec_sum.r += spec * specular->r * Cl.r;
+				spec_sum.g += spec * specular->g * Cl.g;
+				spec_sum.b += spec * specular->b * Cl.b;
+
+				miColor s_spec = *specular * Cl * spec;
+				if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
+				{
+					MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, s_spec, SPECULAR, true);
+				}
 			}
 		}
 
@@ -244,9 +261,9 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 			   MaterialBase::mFrameBufferWriteFactor);
 
 		if (samples) {
-			result->r += sum.r / samples;
-			result->g += sum.g / samples;
-			result->b += sum.b / samples;
+			result->r += (diff_sum.r + spec_sum.r) / samples;
+			result->g += (diff_sum.g + spec_sum.g) / samples;
+			result->b += (diff_sum.b + spec_sum.b) / samples;
 		}
 	}
 
