@@ -75,10 +75,7 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	miColor Cl;
 	miVector L, H;
 
-	miVector	 cross, hair_n, N;  /* shading normal       */
 	miColor		 sum;			/* light contribution       */
-	miScalar	 blend;			/* shading normal blend     */
-	miVector	 norm = state->normal;	/* for nulling/restoring    */
 
 
     // We can't displace.
@@ -108,36 +105,27 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	miColor Ks = *mi_eval_color(&paras->Ks);
 	exponent = *mi_eval_scalar(&paras->exponent);
 
-    // Hair parameters.
-	miScalar	 p = state->bary[1];   // 0 to 1 along hair.
-	miVector	 T = state->derivs[0]; // Tangent to hair.
-	miVector	 V = state->dir;	   // Eye ray.
+
+	/*
+	miScalar p = state->bary[1]; // 0 to 1 along hair.
+	*/
+
+	// Tangent along hair.
+	miVector T = state->derivs[0];
 	mi_vector_normalize(&T);
+
+	// The view vector points towards the intersection point, so we flip it so
+	// that it points towards the viewer (or source of the ray).
+	miVector V = state->dir;
 	mi_vector_neg(&V);
 
-	// Darker colours near the root.
-	miScalar root_mult = 0.5f + smoothstep(0.4f, 0.8f, p) * 0.5f;
-	Kd.r *= root_mult;
-	Kd.g *= root_mult;
-	Kd.b *= root_mult;
+	// Just use the state's vector.
+	miVector N = state->normal;
 
-	// Base opacity (0.5 at root, 1.0 at tip).
-	result->r *= Ka.r;
-	result->g *= Ka.g;
-	result->b *= Ka.b;
-	result->a = 1.0f - smoothstep(0.3f, 1.0f, p);
-
-	// Calculate our shading normal.
-	mi_vector_prod(&cross, &state->normal_geom, &T);
-	mi_vector_prod(&hair_n, &T, &cross);
-	blend = mi_vector_dot(&state->normal_geom, &T);
-	N.x = (1.0f-blend)*hair_n.x + blend*state->normal_geom.x;
-	N.y = (1.0f-blend)*hair_n.y + blend*state->normal_geom.y;
-	N.z = (1.0f-blend)*hair_n.z + blend*state->normal_geom.z;
-	mi_vector_normalize(&N);
-
-	// Null our the normal so that lights do not take it into account.
-	state->normal.x = state->normal.y = state->normal.z = 0.0f;
+	// We must clear the primitive so that it doesn't think there is an
+	// intersection, so that the various lights won't check against the
+	// normal to see if it is pointed in the "wrong" direction.
+	miRc_intersection *saved_pri = state->pri = NULL;
 
 	// Iterate across lights.
 	mi_instance_lightlist(&n_light, &light, state);
@@ -204,8 +192,19 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 		}
 	}
 
-	// Restore the default normal.
-	state->normal = norm;
+	state->pri = saved_pri;
+
+	/*
+	miColor Cidd = BLACK;
+	mi_compute_irradiance(&Cidd, state);
+    IF_PASSES {
+		WRITE_PASS(opaqueColor(Cidd), INDIRECT, false);
+		WRITE_PASS(opaqueColor(Cidd * Kd), BEAUTY, false);
+    }
+	result->r += Cidd.r * Kd.r;
+	result->g += Cidd.g * Kd.g;
+	result->b += Cidd.b * Kd.b;
+	*/
 
 	// If we are translucent, trace more rays.
 	// XXX: Does the renderer not handle this?!
