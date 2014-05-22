@@ -4,11 +4,10 @@
 struct KSHairParameters {
 	ADSK_BASE_SHADER_PARAMETERS
 	miColor     ambience;
-	miColor     ambient;
-	miColor     diffuse;
-	miColor     specular;
+	miColor     Ka;
+	miColor     Kd;
+	miColor     Ks;
 	miScalar    exponent;
-	miInteger   mode;
 };
 
 
@@ -59,89 +58,44 @@ static float smoothstep(float min, float max, float x) {
 
 }
 
-
-struct ksColor : public miColor {
-public:
-
-	ksColor() {}
-
-	ksColor(miColor const &other) {
-		r = other.r; g = other.g; b = other.b; a = other.a;
-	}
-
-	ksColor(miScalar r_, miScalar g_, miScalar b_, miScalar a_) {
-		r = r_; g = g_; b = b_; a = a_;
-	}
-
-	ksColor operator*(miScalar v) {
-		return ksColor(r * v, g * v, b * v, a * v);
-	}
-
-	void operator+=(ksColor const &other) {
-		r += other.r; g += other.g; b += other.b; a += other.a;
-	}
-
-	ksColor operator+(ksColor const &other) {
-		ksColor res(*this);
-		res += other;
-		return res;
-	}
-
-	void operator*=(ksColor const &other) {
-		r *= other.r; g *= other.g; b *= other.b; a *= other.a;
-	}
-
-	ksColor operator*(ksColor const &other) {
-		ksColor res(*this);
-		res *= other;
-		return res;
-	}
-	
-
-};
+// Some helpers.
+#define IF_PASSES if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
+#define WRITE_PASS(...) MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, __VA_ARGS__)
 
 
 miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParameters *paras) {
 
 	/* shader parameters */
-	miColor		*ambient;
-	miColor		*diffuse;
-	miColor		*specular;
 	miScalar	 exponent;
-	miInteger	 mode;
 	miInteger	 n_light;
 	miTag*		 light;
-	miScalar	 mult;			/* diffuse multiplier       */
-	miColor		 diffcol;		/* for diffuse modification */
-	miInteger	 samples;		/* for light sampling       */
-	miScalar	 dot_nl;		/* for diffuse colour       */
-	miScalar	 dot_th;		/* for specular colour      */
-	miScalar	 spec;			/* specular factor          */
+	miScalar	 dot_nl;		/* for Kd colour       */
+	miScalar	 dot_th;		/* for Ks colour      */
+	miScalar	 spec;			/* Ks factor          */
 	miColor Cl;
 	miVector L, H;
 
-	miVector	 cross, hair_n, shading_n;  /* shading normal       */
+	miVector	 cross, hair_n, N;  /* shading normal       */
 	miColor		 sum;			/* light contribution       */
 	miScalar	 blend;			/* shading normal blend     */
 	miVector	 norm = state->normal;	/* for nulling/restoring    */
 
 
     // We can't displace.
-    if(state->type == miRAY_DISPLACE)
+    if (state->type == miRAY_DISPLACE)
         return miFALSE;
         
 	// Shortcut if we are a shadow shader.
-	diffuse = mi_eval_color(&paras->diffuse);
+	miColor Kd = *mi_eval_color(&paras->Kd);
 	if (state->type == miRAY_SHADOW) {
-		result->r *= diffuse->r;
-		result->g *= diffuse->g;
-		result->b *= diffuse->b;
+		result->r *= Kd.r;
+		result->g *= Kd.g;
+		result->b *= Kd.b;
 		return miTRUE;
 	}
 
-    // For mental images macros.
-    // XXX: Do we really need this?!
-	MBS_SETUP(state)
+    // For using MBS (which we currently are not).
+	// MBS_SETUP(state)
 
 	// Dealing with render passes.
     PassTypeInfo* passTypeInfo;
@@ -149,11 +103,10 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
     unsigned int numberOfFrameBuffers = getFrameBufferInfo(state, passTypeInfo, frameBufferInfo);
 
 	// Shader parameters.
-	*result    = *mi_eval_color(&paras->ambience);
-	ambient    =  mi_eval_color(&paras->ambient);
-	specular   =  mi_eval_color(&paras->specular);
-	exponent   = *mi_eval_scalar(&paras->exponent);
-	mode       = *mi_eval_integer(&paras->mode);
+	*result  = *mi_eval_color(&paras->ambience);
+	miColor Ka = *mi_eval_color(&paras->Ka);
+	miColor Ks = *mi_eval_color(&paras->Ks);
+	exponent = *mi_eval_scalar(&paras->exponent);
 
     // Hair parameters.
 	miScalar	 p = state->bary[1];   // 0 to 1 along hair.
@@ -163,103 +116,87 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	mi_vector_neg(&V);
 
 	// Darker colours near the root.
-	mult = 0.5f + smoothstep(0.4f, 0.8f, p) * 0.5f;
-	diffcol.r = diffuse->r * mult;
-	diffcol.g = diffuse->g * mult;
-	diffcol.b = diffuse->b * mult;
+	miScalar root_mult = 0.5f + smoothstep(0.4f, 0.8f, p) * 0.5f;
+	Kd.r *= root_mult;
+	Kd.g *= root_mult;
+	Kd.b *= root_mult;
 
 	// Base opacity (0.5 at root, 1.0 at tip).
-	result->r *= ambient->r;
-	result->g *= ambient->g;
-	result->b *= ambient->b;
+	result->r *= Ka.r;
+	result->g *= Ka.g;
+	result->b *= Ka.b;
 	result->a = 1.0f - smoothstep(0.3f, 1.0f, p);
 
-	/* get shading normal */
+	// Calculate our shading normal.
 	mi_vector_prod(&cross, &state->normal_geom, &T);
 	mi_vector_prod(&hair_n, &T, &cross);
 	blend = mi_vector_dot(&state->normal_geom, &T);
-	shading_n.x = (1.0f-blend)*hair_n.x + blend*state->normal_geom.x;
-	shading_n.y = (1.0f-blend)*hair_n.y + blend*state->normal_geom.y;
-	shading_n.z = (1.0f-blend)*hair_n.z + blend*state->normal_geom.z;
-	mi_vector_normalize(&shading_n);
+	N.x = (1.0f-blend)*hair_n.x + blend*state->normal_geom.x;
+	N.y = (1.0f-blend)*hair_n.y + blend*state->normal_geom.y;
+	N.z = (1.0f-blend)*hair_n.z + blend*state->normal_geom.z;
+	mi_vector_normalize(&N);
 
-	/* null state->normal for now, for sampling lights       */
-	/* we leave state->pri to avoid losing self-intersection */
-	/* handling.                                             */
+	// Null our the normal so that lights do not take it into account.
 	state->normal.x = state->normal.y = state->normal.z = 0.0f;
 
-	miColor diff_sum, spec_sum;
-
-	// Get the light list.
+	// Iterate across lights.
 	mi_instance_lightlist(&n_light, &light, state);
     for (; n_light--; light++)         
 	{
 
-		samples = 0;
-		sum.r = sum.g = sum.b = 0;
-		diff_sum.r = diff_sum.g = diff_sum.b = 0;
-		spec_sum.r = spec_sum.g = spec_sum.b = 0;
+		// Samples MUST be set to 0, or MentalRay segfaults...
+		miInteger samples = 0;
+		miColor diff_sum = BLACK;
+		miColor spec_sum = BLACK;
 
-
-		// Function that initialize light sample accumulators which need to be called before the sample loop.
+		// Sample the light.
 		sampleLightBegin(numberOfFrameBuffers, frameBufferInfo);
-
-		while (mi_sample_light(
-                &Cl, &L, &dot_nl,
-                state, *light, &samples)) {
-	
-			// Call to enable renderpass contributions for light shaders that were not developped using the AdskShaderSDK.    
+		while (mi_sample_light(&Cl, &L, &dot_nl, state, *light, &samples)) {
+	    
 			handleNonAdskLights(numberOfFrameBuffers, frameBufferInfo, Cl, *light, state);
 
-			// Do it ourselves.
-			dot_nl = mi_vector_dot(&shading_n, &L);
+			// We want to calculate dot_nl ourselves, because our N is different.
+			dot_nl = mi_vector_dot(&N, &L);
 			if (dot_nl < 0.0f)
 				dot_nl = 0.0f;
 			else if (dot_nl > 1.0f)
 				dot_nl = 1.0f;
 
-			miColor s_diff = diffcol * Cl * dot_nl;
-			if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
-			{
-				MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, s_diff, DIFFUSE, true);
+			// Diffuse calculation.
+			miColor sample_diffuse = Kd * Cl * dot_nl;
+			IF_PASSES {
+				WRITE_PASS(sample_diffuse, DIFFUSE, true);
 			}
+			diff_sum.r += sample_diffuse.r;
+			diff_sum.g += sample_diffuse.g;
+			diff_sum.b += sample_diffuse.b;
 
-			diff_sum.r += dot_nl * diffcol.r * Cl.r;
-			diff_sum.g += dot_nl * diffcol.g * Cl.g;
-			diff_sum.b += dot_nl * diffcol.b * Cl.b;
-
-			/* find the halfway vector h */
+			// Spec intensity from Halfway vector.
 			mi_vector_add(&H, &V, &L);
 			mi_vector_normalize(&H);
-
-			/* specular coefficient from auk paper */
 			dot_th = mi_vector_dot(&T, &H);
-			spec = pow(1.0 - dot_th*dot_th, 0.5*exponent);
+			spec = pow(1.0 - dot_th * dot_th, 0.5 * exponent);
 
-			/* specular colour */
+			// Specular calculation.
 			if (spec > 0.0) {
-				spec_sum.r += spec * specular->r * Cl.r;
-				spec_sum.g += spec * specular->g * Cl.g;
-				spec_sum.b += spec * specular->b * Cl.b;
-
-				miColor s_spec = *specular * Cl * spec;
-				if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
-				{
-					MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, s_spec, SPECULAR, true);
+				miColor sample_specular = Ks * Cl * spec;
+				IF_PASSES {
+					WRITE_PASS(sample_specular, SPECULAR, true);
 				}
+				spec_sum.r += sample_specular.r;
+				spec_sum.g += sample_specular.g;
+				spec_sum.b += sample_specular.b;
 			}
 		}
 
-		// Function that take care of combining sample values into the material frame buffer values, 
-		//    called after light sampling loop.
-		sampleLightEnd(state,
-			   numberOfFrameBuffers,
-			   frameBufferInfo,
-			   samples,
+		// Accumulate the samples into the frame buffers.
+		sampleLightEnd(state, numberOfFrameBuffers, frameBufferInfo, samples,
 			   MaterialBase::mFrameBufferWriteOperation,
 			   MaterialBase::mFrameBufferWriteFlags,
-			   MaterialBase::mFrameBufferWriteFactor);
+			   MaterialBase::mFrameBufferWriteFactor
+		);
 
+		// Accumulate our own samples.
 		if (samples) {
 			result->r += (diff_sum.r + spec_sum.r) / samples;
 			result->g += (diff_sum.g + spec_sum.g) / samples;
@@ -267,10 +204,11 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 		}
 	}
 
-	/* restore state->normal */
+	// Restore the default normal.
 	state->normal = norm;
 
-	/* if we are translucent, trace more rays */
+	// If we are translucent, trace more rays.
+	// XXX: Does the renderer not handle this?!
 	if (result->a < 0.9999) {
 		miScalar alphafactor;
 		miColor col = {0.0, 0.0, 0.0, 0.0};

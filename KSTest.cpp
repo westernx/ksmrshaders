@@ -1,234 +1,117 @@
-// ==========================================================================
-// Copyright 2008 Autodesk, Inc. All rights reserved.
-//
-// Use of this software is subject to the terms of the Autodesk
-// license agreement provided at the time of installation or download,
-// or which otherwise accompanies this software in either electronic
-// or hard copy form.
-// ==========================================================================
-
-/*****************************************************************************
- * This example takes the mental ray maya_illum_phong devkit example and 
- * adds support for a subset of the Maya render passes. This differs from the
- * MayaPhong example in that here we define the light loop ourselves, while in
- * MayaPhong the AdskShaderSDK light loop is used and we only implement the
- * specular shading component.
- *
- * Because we write our own light loop, we are also responsible for
- * contributing to the appropriate render passes. See the "RENDER PASS
- * SPECIFIC" sections below. We contribute to ambient material color, diffuse
- * material color, diffuse, direct irradiance, specular, indirect and beauty
- * passes. Support for other passes could easily be added by computing the
- * correct value and contributing in the same manner. See adskShader.h for
- * more details on the other passes.
- *
- * This shader does not support per-light contributions defined by pass
- * contribution maps, however it does support per-object contributions as long
- * as the shader's shading group is exported with the Maya Shading Engine. For
- * details on supporting per-light contributions see adskShader.h
- *****************************************************************************/
-
 #include "adskShader.h"
 
 // Parameters struct
-struct KSTestPhongParameters {
+struct KSTestParameters {
 	ADSK_BASE_SHADER_PARAMETERS
-	miColor     ambience;
 	miColor     ambient;
 	miColor     diffuse;
-	miColor     specular;
-	miScalar    exponent;
 };
 
-const unsigned int KSTestPhong_VERSION = 1;
-typedef ShaderHelper<KSTestPhongParameters> BaseShaderHelperType;
+const unsigned int KSTest_VERSION = 2;
+typedef ShaderHelper<KSTestParameters> BaseShaderHelperType;
 
 /*****************************************************************************
  * Wrapper class for custom phong shader, as an extension of the base
  * Material template.
  *****************************************************************************/
-class KSTestPhongClass : public Material<KSTestPhongParameters, BaseShaderHelperType, KSTestPhong_VERSION>
+class KSTestClass : public Material<KSTestParameters, BaseShaderHelperType, KSTest_VERSION>
 {
 public:
-	// constructor, initialize any per-instance shader data here
-	KSTestPhongClass(miState *pState, KSTestPhongParameters *pParameters);
-	// destructor, de-initialize any per-instance shader data here
-	~KSTestPhongClass();
 
-	// static initializer, called once per render
-	static void init(miState *pState, KSTestPhongParameters *pParameters);
-	// static deinitializer, called once per render
-	static void exit(miState *pState, KSTestPhongParameters *pParameters);
+	static void init(miState *state, KSTestParameters *params) {}
+	static void exit(miState *state, KSTestParameters *params) {}
 
-	// main shading function called for shader samples
-	miBoolean operator()(miColor *pResult, miState *pState, KSTestPhongParameters *pParameters);
+	KSTestClass(miState *state, KSTestParameters *params) :
+		Material<KSTestParameters, BaseShaderHelperType, KSTest_VERSION>(state, params)
+		{}
+	~KSTestClass() {}
+
+	miBoolean operator()(miColor *result, miState *state, KSTestParameters *params);
 
 private:
+
 	// short cut definition for base class
-	typedef Material<KSTestPhongParameters, BaseShaderHelperType, KSTestPhong_VERSION> MaterialBase;
+	typedef Material<KSTestParameters, BaseShaderHelperType, KSTest_VERSION> MaterialBase;
+
 };
 
-KSTestPhongClass::KSTestPhongClass(miState *pState, KSTestPhongParameters *pParameters) :
-	Material<KSTestPhongParameters, BaseShaderHelperType, KSTestPhong_VERSION>(pState, pParameters)
+
+#define IF_PASSES if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
+#define WRITE_PASS(...) MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, __VA_ARGS__)
+
+miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParameters *params)
 {
-	// Initialize any instance specific shader data here.
 
-	// This is equivalent to the standard init() shader function when it
-	// is called with non-NULL parameters.
-}
-
-KSTestPhongClass::~KSTestPhongClass()
-{
-	// Deinitialize any instance specific shader data here.
-
-	// This is equivalent to the standard exit() shader function when it
-	// is called with non-NULL parameters.
-
-	// MaterialBase::mDestructorState and MaterialBase::mDestructorParameters
-	// will be defined correctly when this is called if you need access to the
-	// shading state or the parameters.
-}
-
-void KSTestPhongClass::init(miState *pState, KSTestPhongParameters *pParameters)
-{
-	// Initialize any static shader data here.
-
-	// This is equivalent to the standard init() shader function when it
-	// is called with NULL parameters.
-}
-
-void KSTestPhongClass::exit(miState *pState, KSTestPhongParameters *pParameters)
-{
-	// Deinitialize any static shader data here.
-
-	// This is equivalent to the standard exit() shader function when it
-	// is called with NULL parameters.
-}
-
-miBoolean KSTestPhongClass::operator()(miColor *pResult, miState *pState, KSTestPhongParameters *pParameters)
-{
-	miColor *ambi, *diff, *spec;
-	miTag *lights;                          // tag of light instance
-	int numLights;                           // # of lights source
-
-	miColor color;                         // color from light source
-	miColor diffSum, specSum;              // component accumulators
-	miVector dir;                          // direction towards light
-	miScalar dot_nl;                       // dot prod of normal and dir
-	miScalar expo;                         // Phong exponent (cosine power)
-	miScalar s;                            // amount of specular reflection
-	miScalar inv;                          // multiplier for inverse samples
-    LightDataArray *inLightData;			 
-
-    // For mental images macros
-    miState * &state = pState;
-
+	// Bail on unspported calls.
+	if (state->type == miRAY_SHADOW || state->type == miRAY_DISPLACE ) {
+		return(miFALSE);
+	}
+	
+	// Initialize "mayabase state" into a MBS variable.
 	MBS_SETUP(state)
 
-	miBoolean emitDiffuse = miTRUE;  // default emits diffuse
-	miBoolean emitSpecular = miTRUE; // default emits specular
-
-	// RENDER PASS SPECIFIC
-	//   Access frame buffers for render passes
+	// Setup framebuffers.
     PassTypeInfo* passTypeInfo;
     FrameBufferInfo* frameBufferInfo;
     unsigned int numberOfFrameBuffers = getFrameBufferInfo(state, passTypeInfo, frameBufferInfo);
 
-	// check for illegal calls
-	if (state->type == miRAY_SHADOW || state->type == miRAY_DISPLACE ) {
-		return(miFALSE);
-	}
  
-	ambi =  mi_eval_color(&pParameters->ambient);
-	diff =  mi_eval_color(&pParameters->diffuse);
-	spec =  mi_eval_color(&pParameters->specular);
-	expo = *mi_eval_scalar(&pParameters->exponent);
+	miColor *Ka = mi_eval_color(&params->ambient);
+	miColor *Kd = mi_eval_color(&params->diffuse);
 
-	*pResult    = *mi_eval_color(&pParameters->ambience); // ambient term
-	pResult->r *= ambi->r;
-	pResult->g *= ambi->g;
-	pResult->b *= ambi->b;
+	result->r = result->g = result->b = 0.0;
+	result->a = 1.0;
 
-	// RENDER PASS SPECIFIC
-	//   Write values to non-light dependant frame buffers
-    if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
-    {
-		MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, opaqueColor(*ambi), AMBIENT_MATERIAL_COLOR, false);
-        MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, opaqueColor(*diff), DIFFUSE_MATERIAL_COLOR, false);
+    IF_PASSES {
+		WRITE_PASS(opaqueColor(*Ka), AMBIENT_MATERIAL_COLOR, false);
+        WRITE_PASS(opaqueColor(*Kd), DIFFUSE_MATERIAL_COLOR, false);
     }
 
-	inLightData = &MBS->lightData;
+	
+	LightDataArray *inLightData = &MBS->lightData;
     miColor  *preShadowColor = &inLightData->preShadowColor;
+	
 
-	/* Get instance light list. */
+	miTag *lights;
+	int numLights;
     mi_instance_lightlist(&numLights, &lights, state);
-    /* Evaluate all lights in the list. */
-    for ( ; numLights--; lights++)         
-	{
-		int    numSamples = 0;
-		diffSum.r = diffSum.g = diffSum.b = 0;
-		specSum.r = specSum.g = specSum.b = 0;
+    for (; numLights--; lights++) {
 
-		// Function that initialize light sample accumulators which need to be called before the sample loop.
+		int numSamples = 0;
+		miColor diffSum = BLACK;
+
 		sampleLightBegin(numberOfFrameBuffers, frameBufferInfo);
 
-		while (mi_sample_light(
-                &color, &dir, &dot_nl,
-                state, *lights, &numSamples)) {
+		miColor Cl;
+		miVector L;
+		miScalar dot_nl;
+		while (mi_sample_light(&Cl, &L, &dot_nl, state, *lights, &numSamples)) {
 	
 			// Call to enable renderpass contributions for light shaders that were not developped using the AdskShaderSDK.    
-			handleNonAdskLights(numberOfFrameBuffers, frameBufferInfo, color, *lights, state);
+			handleNonAdskLights(numberOfFrameBuffers, frameBufferInfo, Cl, *lights, state);
 			
 			LightDataArray *ldat = &MBS->lightData;
-			if (ldat){
-			    emitDiffuse = ldat->lightDiffuse;
-			    emitSpecular = ldat->lightSpecular;
-			}
+			miBoolean emitDiffuse = ldat ? ldat->lightDiffuse : miTRUE;
 
 			// Add diffuse component
 			// only if the light emits diffuse lights
 			miColor unlitDiffuse = BLACK;
 			if (emitDiffuse && dot_nl > 0) {
-				unlitDiffuse = opaqueColor(dot_nl*(*diff));
-				// Lambert's cosine law
-				if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
-				{
-					MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, unlitDiffuse, DIFFUSE, true);
-					MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, opaqueColor(dot_nl*WHITE), DIRECT_IRRADIANCE, true);
+				unlitDiffuse = opaqueColor(dot_nl*(*Kd));
+				IF_PASSES {
+					WRITE_PASS(unlitDiffuse, DIFFUSE, true);
+					WRITE_PASS(opaqueColor(dot_nl*WHITE), DIRECT_IRRADIANCE, true);
 				}
-
-				//Compute values for the master beauty pass
-				diffSum = diffSum + unlitDiffuse * color;
+				diffSum = diffSum + unlitDiffuse * Cl;
 			}
 
-			// Add specular component
-			// only if the light emits specular lights
-			miColor unlitSpecular = BLACK;
-			if (emitSpecular) {
-				// Phong's cosine power
-				s = mi_phong_specular(expo, state, &dir);
-				if (s > 0.0) {
-					unlitSpecular = opaqueColor(s*(*spec));
-					if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
-					{
-						MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, unlitSpecular, SPECULAR, true);
-					}
-					specSum = specSum + unlitSpecular * color;
-				}
-			}
+			miColor unlitBeauty = opaqueColor(unlitDiffuse);
 
-			miColor unlitBeauty = opaqueColor(unlitSpecular+unlitDiffuse);
-
-            MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, 
-                unlitBeauty, SHADOW, true, preShadowColor);
-            MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, 
-                MAYA_LUMINANCE(unlitBeauty), SHADOW_MONO, true, preShadowColor);
-            MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, 
-                unlitBeauty, BEAUTY, true );
+            WRITE_PASS(unlitBeauty, SHADOW, true, preShadowColor);
+            WRITE_PASS(unlitBeauty, BEAUTY, true);
 		}
 
-		// Function that take care of combining sample values into the material frame buffer values, 
-		//    called after light sampling loop.
+		// Accumulate sample values into the material frame buffer values.
 		sampleLightEnd(state,
 			   numberOfFrameBuffers,
 			   frameBufferInfo,
@@ -238,35 +121,30 @@ miBoolean KSTestPhongClass::operator()(miColor *pResult, miState *pState, KSTest
 			   MaterialBase::mFrameBufferWriteFactor);
 
 		if (numSamples > 0) {
-			inv = 1.0f / numSamples;
+			float inv = 1.0f / numSamples;
 
 			diffSum.r *= inv;
 			diffSum.g *= inv;
 			diffSum.b *= inv;
 
-			specSum.r *= inv;
-			specSum.g *= inv;
-			specSum.b *= inv;
-
-			pResult->r += diffSum.r + specSum.r;
-			pResult->g += diffSum.g + specSum.g;
-			pResult->b += diffSum.b + specSum.b;
+			result->r += diffSum.r;
+			result->g += diffSum.g;
+			result->b += diffSum.b;
 		}
-	} /* for ( ; numLights--; lights++) */
 
-	// add contribution from indirect illumination (caustics)
-	mi_compute_irradiance(&color, state);
-	pResult->r += color.r * diff->r;
-	pResult->g += color.g * diff->g;
-	pResult->b += color.b * diff->b;
-	pResult->a  = 1;
+	} // for ( ; numLights--; lights++) 
 
-	// RENDER PASS SPECIFIC
-	//   Write indirect illumination and final beauty to frame buffers
-    if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
-    {
-		MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, opaqueColor(color), INDIRECT, false);
-		MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, opaqueColor(color*(*diff)), BEAUTY, false);
+	// Indirect illumination (IDD(?) and caustics).
+	miColor Cid = BLACK;
+	mi_compute_irradiance(&Cid, state);
+	result->r += Cid.r * Kd->r;
+	result->g += Cid.g * Kd->g;
+	result->b += Cid.b * Kd->b;
+	result->a  = 1;
+
+    IF_PASSES {
+		WRITE_PASS(opaqueColor(Cid), INDIRECT, false);
+		WRITE_PASS(opaqueColor(Cid*(*Kd)), BEAUTY, false);
     }
 
 	return(miTRUE);
@@ -274,4 +152,4 @@ miBoolean KSTestPhongClass::operator()(miColor *pResult, miState *pState, KSTest
 
 // Use the EXPOSE macro to create Mental Ray compliant shader functions
 //----------------------------------------------------------------------
-EXPOSE(KSTestPhong, miColor, );
+EXPOSE(KSTest, miColor, );
