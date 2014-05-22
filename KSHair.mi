@@ -13,8 +13,6 @@ declare shader
 		color		"diffuse",
 		color		"specular",
 		scalar		"exponent",
-		integer		"mode",
-		array light	"lights"
 	)
 	version 1
 	apply material	
