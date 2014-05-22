@@ -60,6 +60,47 @@ static float smoothstep(float min, float max, float x) {
 }
 
 
+struct ksColor : public miColor {
+public:
+
+	ksColor() {}
+
+	ksColor(miColor const &other) {
+		r = other.r; g = other.g; b = other.b; a = other.a;
+	}
+
+	ksColor(miScalar r_, miScalar g_, miScalar b_, miScalar a_) {
+		r = r_; g = g_; b = b_; a = a_;
+	}
+
+	ksColor operator*(miScalar v) {
+		return ksColor(r * v, g * v, b * v, a * v);
+	}
+
+	void operator+=(ksColor const &other) {
+		r += other.r; g += other.g; b += other.b; a += other.a;
+	}
+
+	ksColor operator+(ksColor const &other) {
+		ksColor res(*this);
+		res += other;
+		return res;
+	}
+
+	void operator*=(ksColor const &other) {
+		r *= other.r; g *= other.g; b *= other.b; a *= other.a;
+	}
+
+	ksColor operator*(ksColor const &other) {
+		ksColor res(*this);
+		res *= other;
+		return res;
+	}
+	
+
+};
+
+
 miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParameters *paras) {
 
 	/* shader parameters */
@@ -81,23 +122,11 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	miVector	 h;			/* halfway vector           */
 	miScalar	 spec;			/* specular factor          */
 
-	miScalar	 p = state->bary[1];	/* hair parameter           */
-	miVector	 t = state->derivs[0];	/* tangent to hair          */
-	miVector	 v = state->dir;	/* eye ray                  */
 
 	miVector	 cross, hair_n, shading_n;  /* shading normal       */
 	miColor		 sum;			/* light contribution       */
 	miScalar	 blend;			/* shading normal blend     */
 	miVector	 norm = state->normal;	/* for nulling/restoring    */
-
-
-    // For mental images macros
-	// MBS_SETUP(state)
-
-	// Dealing with render passes.
-    // PassTypeInfo* passTypeInfo;
-    // FrameBufferInfo* frameBufferInfo;
-    // unsigned int numberOfFrameBuffers = getFrameBufferInfo(state, passTypeInfo, frameBufferInfo);
 
 
     // We can't displace.
@@ -113,35 +142,40 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 		return miTRUE;
 	}
 
-	/* tangent is not normalized yet */
-	mi_vector_normalize(&t);
+    // For mental images macros.
+    // XXX: Do we really need this?!
+	MBS_SETUP(state)
 
-	/* get parameters */
+	// Dealing with render passes.
+    PassTypeInfo* passTypeInfo;
+    FrameBufferInfo* frameBufferInfo;
+    unsigned int numberOfFrameBuffers = getFrameBufferInfo(state, passTypeInfo, frameBufferInfo);
+
+	// Shader parameters.
 	*result    = *mi_eval_color(&paras->ambience);
 	ambient    =  mi_eval_color(&paras->ambient);
-	result->r *=  ambient->r;
-	result->g *=  ambient->g;
-	result->b *=  ambient->b;
 	specular   =  mi_eval_color(&paras->specular);
 	exponent   = *mi_eval_scalar(&paras->exponent);
 	mode       = *mi_eval_integer(&paras->mode);
 
-	// Get the light list.
-	mi_instance_lightlist(&n_light, &light, state);
+    // Hair parameters.
+	miScalar	 p = state->bary[1];   // 0 to 1 along hair.
+	miVector	 t = state->derivs[0]; // Tangent to hair.
+	miVector	 v = state->dir;	   // Eye ray.
+	mi_vector_normalize(&t);
+	mi_vector_neg(&v);
 
-	/* modify diffuse colour to give darker colour near
-	   root. this may obviate the need for real shadows,
-	   which for hair can be very expensive. */
+	// Darker colours near the root.
 	mult = 0.5f + smoothstep(0.4f, 0.8f, p) * 0.5f;
 	diffcol.r = diffuse->r * mult;
 	diffcol.g = diffuse->g * mult;
 	diffcol.b = diffuse->b * mult;
 
-	/* calculate current opacity (0.5 at root, 1.0 at tip) */
+	// Base opacity (0.5 at root, 1.0 at tip).
+	result->r *= ambient->r;
+	result->g *= ambient->g;
+	result->b *= ambient->b;
 	result->a = 1.0f - smoothstep(0.3f, 1.0f, p);
-
-	/* prepare some values */
-	mi_vector_neg(&v);
 
 	/* get shading normal */
 	mi_vector_prod(&cross, &state->normal_geom, &t);
@@ -156,6 +190,9 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	/* we leave state->pri to avoid losing self-intersection */
 	/* handling.                                             */
 	state->normal.x = state->normal.y = state->normal.z = 0.0f;
+
+	// Get the light list.
+	mi_instance_lightlist(&n_light, &light, state);
 
 	/* loop over lights */
 	if (mode == 4 || n_light) {
