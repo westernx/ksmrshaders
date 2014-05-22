@@ -1,5 +1,9 @@
-MIS := $(wildcard *.mi)
-CPPS := $(MIS:%.mi=%.cpp)
+
+VERSION := 2014
+
+MI_SRC := $(wildcard *.mi)
+MI_DST := $(MI_SRC:%=${VERSION}/%)
+CPPS := $(MI_SRC:%.mi=%.cpp)
 
 LIB_EXT := .so
 UNAME_S := $(shell uname -s)
@@ -7,19 +11,23 @@ ifeq (${UNAME_S},Darwin)
 	LIB_EXT := .dylib
 endif
 
-LIBS := $(CPPS:%.cpp=%${LIB_EXT})
+LIBS := $(CPPS:%.cpp=${VERSION}/%${LIB_EXT})
 
 
 .PHONY: default clean
 
-default: ${LIBS}
+default: ${LIBS} ${MI_DST}
 
-%.dylib: %.cpp
+${VERSION}/%.dylib: %.cpp
+	@ mkdir -p $(dir $@)
 	g++ -shared \
 		-undefined dynamic_lookup \
-		-I/Applications/Autodesk/mentalrayForMaya2014/devkit/adskShaderSDK/include \
-		-I/Applications/Autodesk/mentalrayForMaya2014/devkit/include \
+		-I/Applications/Autodesk/mentalrayForMaya${VERSION}/devkit/adskShaderSDK/include \
+		-I/Applications/Autodesk/mentalrayForMaya${VERSION}/devkit/include \
 		-o $@ $<
 
+${VERSION}/%.mi: %.mi
+	cp $< $@
+
 clean:
-	- rm *${LIB_EXT}
+	- rm ${LIBS}
