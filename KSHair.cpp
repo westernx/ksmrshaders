@@ -109,19 +109,16 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	miColor		*specular;
 	miScalar	 exponent;
 	miInteger	 mode;
-	miInteger	 i_light;
 	miInteger	 n_light;
 	miTag*		 light;
 	miScalar	 mult;			/* diffuse multiplier       */
 	miColor		 diffcol;		/* for diffuse modification */
 	miInteger	 samples;		/* for light sampling       */
-	miColor		 lightcol;		/* light colour             */
 	miScalar	 dot_nl;		/* for diffuse colour       */
 	miScalar	 dot_th;		/* for specular colour      */
-	miVector	 l;			/* light direction          */
-	miVector	 h;			/* halfway vector           */
 	miScalar	 spec;			/* specular factor          */
-
+	miColor Cl;
+	miVector L, H;
 
 	miVector	 cross, hair_n, shading_n;  /* shading normal       */
 	miColor		 sum;			/* light contribution       */
@@ -160,10 +157,10 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 
     // Hair parameters.
 	miScalar	 p = state->bary[1];   // 0 to 1 along hair.
-	miVector	 t = state->derivs[0]; // Tangent to hair.
-	miVector	 v = state->dir;	   // Eye ray.
-	mi_vector_normalize(&t);
-	mi_vector_neg(&v);
+	miVector	 T = state->derivs[0]; // Tangent to hair.
+	miVector	 V = state->dir;	   // Eye ray.
+	mi_vector_normalize(&T);
+	mi_vector_neg(&V);
 
 	// Darker colours near the root.
 	mult = 0.5f + smoothstep(0.4f, 0.8f, p) * 0.5f;
@@ -178,9 +175,9 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	result->a = 1.0f - smoothstep(0.3f, 1.0f, p);
 
 	/* get shading normal */
-	mi_vector_prod(&cross, &state->normal_geom, &t);
-	mi_vector_prod(&hair_n, &t, &cross);
-	blend = mi_vector_dot(&state->normal_geom, &t);
+	mi_vector_prod(&cross, &state->normal_geom, &T);
+	mi_vector_prod(&hair_n, &T, &cross);
+	blend = mi_vector_dot(&state->normal_geom, &T);
 	shading_n.x = (1.0f-blend)*hair_n.x + blend*state->normal_geom.x;
 	shading_n.y = (1.0f-blend)*hair_n.y + blend*state->normal_geom.y;
 	shading_n.z = (1.0f-blend)*hair_n.z + blend*state->normal_geom.z;
@@ -193,55 +190,63 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 
 	// Get the light list.
 	mi_instance_lightlist(&n_light, &light, state);
+    for (; n_light--; light++)         
+	{
 
-	/* loop over lights */
-	if (mode == 4 || n_light) {
-		for (mi::shader::LightIterator iter(state, light, n_light);
-		     !iter.at_end(); ++iter) {
-			/* initially colour and samples */
-			sum.r = sum.g = sum.b = 0.0f;
+		samples = 0;
+		sum.r = sum.g = sum.b = 0;
 
-			/* potentially multiply sample each light */
-			while (iter->sample()) {
-				/* calculate dot_nl from our shading normal.  */
-				/* clamp to 0.0-1.0 range, to give good match */
-				/* with surface shading of base surface.      */
-				l = iter->get_direction();
-				dot_nl = mi_vector_dot(&shading_n, &l);
-				if (dot_nl < 0.0f)
-					dot_nl = 0.0f;
-				else if (dot_nl > 1.0f)
-					dot_nl = 1.0f;
+		// Function that initialize light sample accumulators which need to be called before the sample loop.
+		sampleLightBegin(numberOfFrameBuffers, frameBufferInfo);
 
-				/* diffuse term */
-				iter->get_contribution(&lightcol);
-				sum.r += dot_nl * diffcol.r * lightcol.r;
-				sum.g += dot_nl * diffcol.g * lightcol.g;
-				sum.b += dot_nl * diffcol.b * lightcol.b;
+		while (mi_sample_light(
+                &Cl, &L, &dot_nl,
+                state, *light, &samples)) {
+	
+			// Call to enable renderpass contributions for light shaders that were not developped using the AdskShaderSDK.    
+			handleNonAdskLights(numberOfFrameBuffers, frameBufferInfo, Cl, *light, state);
 
-				/* find the halfway vector h */
-				mi_vector_add(&h, &v, &l);
-				mi_vector_normalize(&h);
+			// Do it ourselves.
+			dot_nl = mi_vector_dot(&shading_n, &L);
+			if (dot_nl < 0.0f)
+				dot_nl = 0.0f;
+			else if (dot_nl > 1.0f)
+				dot_nl = 1.0f;
 
-				/* specular coefficient from auk paper */
-				dot_th = mi_vector_dot(&t, &h);
-				spec = pow(1.0 - dot_th*dot_th, 0.5*exponent);
+			sum.r += dot_nl * diffcol.r * Cl.r;
+			sum.g += dot_nl * diffcol.g * Cl.g;
+			sum.b += dot_nl * diffcol.b * Cl.b;
 
-				/* specular colour */
-				if (spec > 0.0) {
-					sum.r += spec * specular->r * lightcol.r;
-					sum.g += spec * specular->g * lightcol.g;
-					sum.b += spec * specular->b * lightcol.b;
-				}
+			/* find the halfway vector h */
+			mi_vector_add(&H, &V, &L);
+			mi_vector_normalize(&H);
+
+			/* specular coefficient from auk paper */
+			dot_th = mi_vector_dot(&T, &H);
+			spec = pow(1.0 - dot_th*dot_th, 0.5*exponent);
+
+			/* specular colour */
+			if (spec > 0.0) {
+				sum.r += spec * specular->r * Cl.r;
+				sum.g += spec * specular->g * Cl.g;
+				sum.b += spec * specular->b * Cl.b;
 			}
+		}
 
-			/* add it in */
-			samples = iter->get_number_of_samples();
-			if (samples) {
-				result->r += sum.r / samples;
-				result->g += sum.g / samples;
-				result->b += sum.b / samples;
-			}
+		// Function that take care of combining sample values into the material frame buffer values, 
+		//    called after light sampling loop.
+		sampleLightEnd(state,
+			   numberOfFrameBuffers,
+			   frameBufferInfo,
+			   samples,
+			   MaterialBase::mFrameBufferWriteOperation,
+			   MaterialBase::mFrameBufferWriteFlags,
+			   MaterialBase::mFrameBufferWriteFactor);
+
+		if (samples) {
+			result->r += sum.r / samples;
+			result->g += sum.g / samples;
+			result->b += sum.b / samples;
 		}
 	}
 
