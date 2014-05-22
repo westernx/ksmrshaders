@@ -5,10 +5,18 @@ MI_SRC := $(wildcard *.mi)
 MI_DST := $(MI_SRC:%=${VERSION}/%)
 CPPS := $(MI_SRC:%.mi=%.cpp)
 
+CXXFLAGS :=
+
 LIB_EXT := .so
 UNAME_S := $(shell uname -s)
+
 ifeq (${UNAME_S},Darwin)
 	LIB_EXT := .dylib
+	MR_ROOT := /Applications/Autodesk/mentalrayForMaya${VERSION}
+	CXXFLAGS += -undefined dynamic_lookup
+else
+	MR_ROOT := /opt/autodesk/mentalrayForMaya${VERSION}
+	CXXFLAGS += -fPIC
 endif
 
 LIBS := $(CPPS:%.cpp=${VERSION}/%${LIB_EXT})
@@ -18,12 +26,11 @@ LIBS := $(CPPS:%.cpp=${VERSION}/%${LIB_EXT})
 
 default: ${LIBS} ${MI_DST}
 
-${VERSION}/%.dylib: %.cpp
+${VERSION}/%${LIB_EXT}: %.cpp
 	@ mkdir -p $(dir $@)
-	g++ -shared \
-		-undefined dynamic_lookup \
-		-I/Applications/Autodesk/mentalrayForMaya${VERSION}/devkit/adskShaderSDK/include \
-		-I/Applications/Autodesk/mentalrayForMaya${VERSION}/devkit/include \
+	g++ -shared ${CXXFLAGS} \
+		-I${MR_ROOT}/devkit/adskShaderSDK/include \
+		-I${MR_ROOT}/devkit/include \
 		-o $@ $<
 
 ${VERSION}/%.mi: %.mi
