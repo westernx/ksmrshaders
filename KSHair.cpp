@@ -154,6 +154,10 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 			else if (dot_nl > 1.0f)
 				dot_nl = 1.0f;
 
+			IF_PASSES {
+				WRITE_PASS(opaqueColor(dot_nl * Cl), DIRECT_IRRADIANCE, true);
+			}
+
 			// Diffuse calculation.
 			miColor sample_diffuse = Kd * Cl * dot_nl;
 			IF_PASSES {
