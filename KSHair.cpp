@@ -105,6 +105,10 @@ miBoolean KSHairClass::operator()(miColor *result, miState *state, KSHairParamet
 	miColor Ks = *mi_eval_color(&paras->Ks);
 	exponent = *mi_eval_scalar(&paras->exponent);
 
+	IF_PASSES {
+		WRITE_PASS(opaqueColor(Ka), AMBIENT_MATERIAL_COLOR, false);
+        WRITE_PASS(opaqueColor(Kd), DIFFUSE_MATERIAL_COLOR, false);
+    }
 
 	/*
 	miScalar p = state->bary[1]; // 0 to 1 along hair.
