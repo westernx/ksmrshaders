@@ -10,10 +10,7 @@ struct KSTestParameters {
 const unsigned int KSTest_VERSION = 2;
 typedef ShaderHelper<KSTestParameters> BaseShaderHelperType;
 
-/*****************************************************************************
- * Wrapper class for custom phong shader, as an extension of the base
- * Material template.
- *****************************************************************************/
+
 class KSTestClass : public Material<KSTestParameters, BaseShaderHelperType, KSTest_VERSION>
 {
 public:
@@ -36,13 +33,22 @@ private:
 };
 
 
+inline miColor operator/(const miColor &lhs, const miColor &rhs) {
+	miColor res;
+	res.r = rhs.r ? lhs.r / rhs.r : 0;
+	res.g = rhs.g ? lhs.g / rhs.g : 0;
+	res.b = rhs.b ? lhs.b / rhs.b : 0;
+	res.a = rhs.a ? lhs.a / rhs.a : 0;
+	return res;
+}
+
+
 #define IF_PASSES if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
 #define WRITE_PASS(...) MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, __VA_ARGS__)
 
 miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParameters *params)
 {
 
-	// Bail on unspported calls.
 	if (state->type == miRAY_SHADOW || state->type == miRAY_DISPLACE ) {
 		return(miFALSE);
 	}
@@ -68,10 +74,6 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
     }
 
 	
-	LightDataArray *inLightData = &MBS->lightData;
-    miColor  *preShadowColor = &inLightData->preShadowColor;
-	
-
 	miTag *lights;
 	int numLights;
     mi_instance_lightlist(&numLights, &lights, state);
@@ -84,31 +86,36 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
 
 		miColor Cl;
 		miVector L;
-		miScalar dot_nl;
-		while (mi_sample_light(&Cl, &L, &dot_nl, state, *lights, &numSamples)) {
+		miScalar dotNL;
+		while (mi_sample_light(&Cl, &L, &dotNL, state, *lights, &numSamples)) {
 	
+			LightDataArray *lightData = &MBS->lightData;
+
 			// Call to enable renderpass contributions for light shaders that were not developped using the AdskShaderSDK.    
 			handleNonAdskLights(numberOfFrameBuffers, frameBufferInfo, Cl, *lights, state);
-			
-			LightDataArray *ldat = &MBS->lightData;
-			miBoolean emitDiffuse = ldat ? ldat->lightDiffuse : miTRUE;
 
-			// Add diffuse component
-			// only if the light emits diffuse lights
-			miColor unlitDiffuse = BLACK;
-			if (emitDiffuse && dot_nl > 0) {
-				unlitDiffuse = opaqueColor(dot_nl*(*Kd));
+			dotNL = dotNL > 0 ? dotNL : 0;
+
+			// Only bother with diffuse if the light provides it AND we are
+			// facing roughly the right direction.
+			miColor unlitDiffuse = opaqueColor(dotNL*(*Kd));
+			miColor litDiffuse = opaqueColor(unlitDiffuse * Cl);
+			if (lightData->lightDiffuse) {
 				IF_PASSES {
-					WRITE_PASS(unlitDiffuse, DIFFUSE, true);
-					WRITE_PASS(opaqueColor(dot_nl*WHITE), DIRECT_IRRADIANCE, true);
+
+					WRITE_PASS(opaqueColor(dotNL * Cl), DIRECT_IRRADIANCE, false);
+					WRITE_PASS(opaqueColor(dotNL * lightData->preShadowColor), DIRECT_IRRADIANCE_NO_SHADOW, false);
+
+					WRITE_PASS(litDiffuse, DIFFUSE, false);
+					WRITE_PASS((*Kd) * dotNL * lightData->preShadowColor, DIFFUSE_NO_SHADOW, false);
+		            WRITE_PASS(litDiffuse, BEAUTY, false);
+
+	            	WRITE_PASS(dotNL * (*Kd) * (lightData->preShadowColor - Cl), SHADOW, false);
+	            	WRITE_PASS(dotNL * (lightData->preShadowColor - Cl), RAW_SHADOW, false);
 				}
-				diffSum = diffSum + unlitDiffuse * Cl;
+				diffSum = diffSum + litDiffuse;
 			}
 
-			miColor unlitBeauty = opaqueColor(unlitDiffuse);
-
-            WRITE_PASS(unlitBeauty, SHADOW, true, preShadowColor);
-            WRITE_PASS(unlitBeauty, BEAUTY, true);
 		}
 
 		// Accumulate sample values into the material frame buffer values.
@@ -132,20 +139,7 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
 			result->b += diffSum.b;
 		}
 
-	} // for ( ; numLights--; lights++) 
-
-	// Indirect illumination (IDD(?) and caustics).
-	miColor Cid = BLACK;
-	mi_compute_irradiance(&Cid, state);
-	result->r += Cid.r * Kd->r;
-	result->g += Cid.g * Kd->g;
-	result->b += Cid.b * Kd->b;
-	result->a  = 1;
-
-    IF_PASSES {
-		WRITE_PASS(opaqueColor(Cid), INDIRECT, false);
-		WRITE_PASS(opaqueColor(Cid*(*Kd)), BEAUTY, false);
-    }
+	}
 
 	return(miTRUE);
 }
