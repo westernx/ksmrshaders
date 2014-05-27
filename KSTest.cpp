@@ -3,8 +3,10 @@
 // Parameters struct
 struct KSTestParameters {
 	ADSK_BASE_SHADER_PARAMETERS
-	miColor     ambient;
-	miColor     diffuse;
+	miColor ambient;
+	miColor diffuse;
+	miColor specular;
+	miScalar exponent;
 };
 
 const unsigned int KSTest_VERSION = 2;
@@ -44,7 +46,7 @@ inline miColor operator/(const miColor &lhs, const miColor &rhs) {
 
 
 #define IF_PASSES if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
-#define WRITE_PASS(...) MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, __VA_ARGS__)
+#define WRITE_PASS(pass, value) MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, (value), pass, false)
 
 miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParameters *params)
 {
@@ -61,16 +63,18 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
     FrameBufferInfo* frameBufferInfo;
     unsigned int numberOfFrameBuffers = getFrameBufferInfo(state, passTypeInfo, frameBufferInfo);
 
- 
-	miColor *Ka = mi_eval_color(&params->ambient);
-	miColor *Kd = mi_eval_color(&params->diffuse);
+ 	// Fetch parameters.
+	miColor Ka = opaqueColor(*mi_eval_color(&params->ambient));
+	miColor Kd = opaqueColor(*mi_eval_color(&params->diffuse));
+	miColor Ks = opaqueColor(*mi_eval_color(&params->specular));
+	miScalar exponent = *mi_eval_scalar(&params->exponent);
 
 	result->r = result->g = result->b = 0.0;
 	result->a = 1.0;
 
     IF_PASSES {
-		WRITE_PASS(opaqueColor(*Ka), AMBIENT_MATERIAL_COLOR, false);
-        WRITE_PASS(opaqueColor(*Kd), DIFFUSE_MATERIAL_COLOR, false);
+		WRITE_PASS(AMBIENT_MATERIAL_COLOR, Ka);
+        WRITE_PASS(DIFFUSE_MATERIAL_COLOR, Kd);
     }
 
 	
@@ -80,7 +84,7 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
     for (; numLights--; lights++) {
 
 		int numSamples = 0;
-		miColor diffSum = BLACK;
+		miColor beautySum = BLACK;
 
 		sampleLightBegin(numberOfFrameBuffers, frameBufferInfo);
 
@@ -94,49 +98,75 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
 			// Call to enable renderpass contributions for light shaders that were not developped using the AdskShaderSDK.    
 			handleNonAdskLights(numberOfFrameBuffers, frameBufferInfo, Cl, *lights, state);
 
+			// Normalize what the light gives us.
+			Cl = opaqueColor(Cl);
+			miColor Cl_ns = opaqueColor(lightData->preShadowColor);
 			dotNL = dotNL > 0 ? dotNL : 0;
 
-			// Only bother with diffuse if the light provides it AND we are
-			// facing roughly the right direction.
-			miColor unlitDiffuse = opaqueColor(dotNL*(*Kd));
-			miColor litDiffuse = opaqueColor(unlitDiffuse * Cl);
+			// Irradiance.
+			miColor irradiance    = dotNL * Cl;
+			miColor irradiance_ns = dotNL * Cl_ns;
+			IF_PASSES {
+				WRITE_PASS(DIRECT_IRRADIANCE, irradiance);
+				WRITE_PASS(DIRECT_IRRADIANCE_NO_SHADOW, irradiance_ns);
+	            WRITE_PASS(RAW_SHADOW, irradiance_ns - irradiance);
+			}
+
+			// Diffuse.
+			miColor diffuse = BLACK;
+			miColor diffuse_ns = BLACK;
 			if (lightData->lightDiffuse) {
+				diffuse    = Kd * irradiance;
+				diffuse_ns = Kd * irradiance_ns;
 				IF_PASSES {
-
-					WRITE_PASS(opaqueColor(dotNL * Cl), DIRECT_IRRADIANCE, false);
-					WRITE_PASS(opaqueColor(dotNL * lightData->preShadowColor), DIRECT_IRRADIANCE_NO_SHADOW, false);
-
-					WRITE_PASS(litDiffuse, DIFFUSE, false);
-					WRITE_PASS((*Kd) * dotNL * lightData->preShadowColor, DIFFUSE_NO_SHADOW, false);
-		            WRITE_PASS(litDiffuse, BEAUTY, false);
-
-	            	WRITE_PASS(dotNL * (*Kd) * (lightData->preShadowColor - Cl), SHADOW, false);
-	            	WRITE_PASS(dotNL * (lightData->preShadowColor - Cl), RAW_SHADOW, false);
+					WRITE_PASS(DIFFUSE, diffuse);
+					WRITE_PASS(DIFFUSE_NO_SHADOW, diffuse_ns);
 				}
-				diffSum = diffSum + litDiffuse;
+				beautySum = beautySum + diffuse;
+			}
+
+			// Specular.
+			miColor specular = BLACK;
+			miColor specular_ns = BLACK;
+			if (lightData->lightSpecular) {
+				miScalar s = mi_phong_specular(exponent, state, &L);
+				if (s > 0.0) {
+					specular    = s * Ks * irradiance;
+					specular_ns = s * Ks * irradiance_ns;
+					IF_PASSES {
+						WRITE_PASS(SPECULAR, specular);
+						WRITE_PASS(SPECULAR_NO_SHADOW, specular_ns);
+					}
+					beautySum = beautySum + specular;
+				}
+			}
+
+			// Beauty pass.
+			IF_PASSES {
+				miColor beauty    = diffuse + specular;
+				miColor beauty_ns = diffuse_ns + specular_ns;
+			    WRITE_PASS(BEAUTY, beauty);
+			    WRITE_PASS(BEAUTY_NO_SHADOW, beauty_ns);
+	            WRITE_PASS(SHADOW, beauty_ns - beauty);
 			}
 
 		}
 
 		// Accumulate sample values into the material frame buffer values.
-		sampleLightEnd(state,
-			   numberOfFrameBuffers,
-			   frameBufferInfo,
-			   numSamples,
-			   MaterialBase::mFrameBufferWriteOperation,
-			   MaterialBase::mFrameBufferWriteFlags,
-			   MaterialBase::mFrameBufferWriteFactor);
-
+		sampleLightEnd(
+			state,
+			numberOfFrameBuffers,
+			frameBufferInfo,
+			numSamples,
+			MaterialBase::mFrameBufferWriteOperation,
+			MaterialBase::mFrameBufferWriteFlags,
+			MaterialBase::mFrameBufferWriteFactor
+		);
 		if (numSamples > 0) {
 			float inv = 1.0f / numSamples;
-
-			diffSum.r *= inv;
-			diffSum.g *= inv;
-			diffSum.b *= inv;
-
-			result->r += diffSum.r;
-			result->g += diffSum.g;
-			result->b += diffSum.b;
+			result->r += beautySum.r * inv;
+			result->g += beautySum.g * inv;
+			result->b += beautySum.b * inv;
 		}
 
 	}
