@@ -7,6 +7,7 @@ struct KSTestParameters {
 	miColor diffuse;
 	miColor specular;
 	miScalar exponent;
+	miColor transparency;
 };
 
 const unsigned int KSTest_VERSION = 2;
@@ -35,24 +36,30 @@ private:
 };
 
 
-inline miColor operator/(const miColor &lhs, const miColor &rhs) {
-	miColor res;
-	res.r = rhs.r ? lhs.r / rhs.r : 0;
-	res.g = rhs.g ? lhs.g / rhs.g : 0;
-	res.b = rhs.b ? lhs.b / rhs.b : 0;
-	res.a = rhs.a ? lhs.a / rhs.a : 0;
-	return res;
-}
-
-
 #define IF_PASSES if (numberOfFrameBuffers && MaterialBase::mFrameBufferWriteOperation)
 #define WRITE_PASS(pass, value) MaterialBase::writeToFrameBuffers(state, frameBufferInfo, passTypeInfo, (value), pass, false)
 
 miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParameters *params)
 {
 
-	if (state->type == miRAY_SHADOW || state->type == miRAY_DISPLACE ) {
-		return(miFALSE);
+	if (state->type == miRAY_SHADOW) {
+
+		miColor Kt = opaqueColor(*mi_eval_color(&params->transparency));
+
+		if (state->options->shadow == 's') {
+			// Segmented shadows! We are responsible for linking to the next
+			// shader in the chain.
+			mi_trace_shadow_seg(result, state);
+		}
+
+		// We still do the same thing to the result.
+		*result = *result * Kt;
+		return miTRUE;
+	
+	}
+
+	if (state->type != miRAY_EYE) {
+		return miFALSE;
 	}
 	
 	// Initialize "mayabase state" into a MBS variable.
@@ -68,6 +75,7 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
 	miColor Kd = opaqueColor(*mi_eval_color(&params->diffuse));
 	miColor Ks = opaqueColor(*mi_eval_color(&params->specular));
 	miScalar exponent = *mi_eval_scalar(&params->exponent);
+	miColor Kt = opaqueColor(*mi_eval_color(&params->transparency));
 
 	result->r = result->g = result->b = 0.0;
 	result->a = 1.0;
@@ -173,8 +181,16 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
     IF_PASSES {
 		WRITE_PASS(INDIRECT, opaqueColor(Cidd));
     }
+
+
     *result = *result + Cidd * Kd;
 
+    if (Kt.r || Kt.g || Kt.b) {
+	    miColor nextRes = BLACK;
+	    nextRes.a = 0;
+	    mi_trace_continue(&nextRes, state);
+	    *result = (WHITE - Kt) * *result + Kt * nextRes;
+    }
     result->a = 1.0;
 
 	return(miTRUE);
