@@ -8,12 +8,12 @@ declare shader
 		integer			"FrameBufferWriteFlags" default 0, # no flags
 		scalar			"FrameBufferWriteFactor" default 1.0,
 		# KSHair
-		color		"ambience",
-		color		"ambient",
-		color		"diffuse",
-		color		"specular",
-		scalar		"exponent",
+		color			"ambient",	    #: default .5, .5, .5, 1.
+		color 			"diffuse",	    #: default .7, .7, .7, 1.
+		color           "specular",     #: default .2, .2, .2, 1.
+		scalar          "exponent",     #: default 4
+		color           "transparency", #: default 0, 0, 0, 0
 	)
-	version 1
+	version 3
 	apply material	
 end declare

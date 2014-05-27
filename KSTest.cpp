@@ -52,13 +52,13 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
 			mi_trace_shadow_seg(result, state);
 		}
 
-		// We still do the same thing to the result.
+		// Modulate the light intensity.
 		*result = *result * Kt;
 		return miTRUE;
-	
+
 	}
 
-	if (state->type != miRAY_EYE) {
+	if (state->type != miRAY_EYE && state->type != miRAY_TRANSPARENT) {
 		return miFALSE;
 	}
 	
@@ -188,7 +188,7 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
     if (Kt.r || Kt.g || Kt.b) {
 	    miColor nextRes = BLACK;
 	    nextRes.a = 0;
-	    mi_trace_continue(&nextRes, state);
+	    mi_trace_transparent(&nextRes, state);
 	    *result = (WHITE - Kt) * *result + Kt * nextRes;
     }
     result->a = 1.0;
