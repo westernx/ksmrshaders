@@ -163,13 +163,19 @@ miBoolean KSTestClass::operator()(miColor *result, miState *state, KSTestParamet
 			MaterialBase::mFrameBufferWriteFactor
 		);
 		if (numSamples > 0) {
-			float inv = 1.0f / numSamples;
-			result->r += beautySum.r * inv;
-			result->g += beautySum.g * inv;
-			result->b += beautySum.b * inv;
+			*result = *result + beautySum * (1.0 / numSamples);
 		}
 
 	}
+
+	miColor Cidd = BLACK;
+	mi_compute_irradiance(&Cidd, state);
+    IF_PASSES {
+		WRITE_PASS(INDIRECT, opaqueColor(Cidd));
+    }
+    *result = *result + Cidd * Kd;
+
+    result->a = 1.0;
 
 	return(miTRUE);
 }
