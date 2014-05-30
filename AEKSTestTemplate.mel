@@ -7,6 +7,9 @@ global proc AEKSTestTemplate ( string $nodeName )
 	editorTemplate -beginLayout "KSTest Attributes" -collapse 0 ;
 		editorTemplate -addControl "ambient";
 		editorTemplate -addControl "diffuse";
+		editorTemplate -addControl "specular";
+		editorTemplate -addControl "exponent";
+		editorTemplate -addControl "transparency";
 	editorTemplate -endLayout;	
 
 	editorTemplate -endScrollLayout;

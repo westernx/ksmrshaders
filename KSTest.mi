@@ -14,6 +14,6 @@ declare shader
 		scalar          "exponent",     #: default 4
 		color           "transparency", #: default 0, 0, 0
 	)
-	version 2
+	version 3
 	apply material
 end declare

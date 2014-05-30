@@ -10,7 +10,7 @@ struct KSTestParameters {
 	miColor transparency;
 };
 
-const unsigned int KSTest_VERSION = 2;
+const unsigned int KSTest_VERSION = 3;
 typedef ShaderHelper<KSTestParameters> BaseShaderHelperType;
 
 
